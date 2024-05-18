@@ -40,15 +40,13 @@ def sift_detector(img, flags, return_image):
     # use sift object to detect key points in the grayscale image
     kp = sift.detect(gray, None)
 
-    if flags: # use key points and the image to draw them onto the image with flags
+    if flags and return_image: # use key points and the image to draw them onto the image with flags
         new_img = cv2.drawKeypoints(img, kp, img, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    else: # use key points and the image to draw them onto the image without flags
+    elif not flags and return_image: # use key points and the image to draw them onto the image without flags
         new_img = cv2.drawKeypoints(img, kp, img)
 
     # use sift object to compute the descriptors
     kp, des = sift.compute(gray, kp)
-    print(des[1])
-    print(des[1].shape)
 
     # return img with keypoints drawn on, set of key points and set of descriptors
     if return_image:
@@ -126,37 +124,39 @@ def draw_feature_matching(img_left, img_right):
 
     return img3
 
-def stitch(img, img_):
+def stitch(img_left, img_right):
 
-    kp1, des1 = sift_detector(img_, False, False)
-    kp2, des2 = sift_detector(img, False, False)
-    print(kp1.shape)
-    print(des1.shape)
-    print(kp2.shape)
-    print(des2.shape)
-    # BFMatcher with default params
-    bf = cv2.BFMatcher()
-    matches = two_best_matcher(des2, des1)
+    kp1, des1 = sift_detector(img_right, False, False)
+    kp2, des2 = sift_detector(img_left, False, False)
+
+    # find matches using left as query descriptors and right as training descriptors
+    matches = two_best_matcher(des1, des2)
 
     # Apply ratio test
     good = []
+    Threshold = 0.7
     for m in matches:
-        if m[0].distance < 0.5 * m[1].distance:
-            good.append(m)
+        if m[0].distance / m[1].distance < Threshold:
+            good.append([m[0]])
     matches = np.asarray(good)
 
     # cv.drawMatchesKnn expects list of lists as matches.
-    if len(matches[:, 0]) >= 4:
-        src = np.float32([kp1[m.queryIdx].pt for m in matches[:, 0]]).reshape(-1, 1, 2)
-        dst = np.float32([kp2[m.trainIdx].pt for m in matches[:, 0]]).reshape(-1, 1, 2)
+    best_matches = matches[:, 0]
+    if len(best_matches) >= 4:
+        src = []
+        dst = []
+        for m in best_matches:
+            src.append(kp1[m.queryIdx].pt)
+            dst.append(kp2[m.trainIdx].pt)
+        src = np.float32(src)#.reshape(-1, 1, 2)
+        dst = np.float32(dst)#.reshape(-1, 1, 2)
         H, masked = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
-        # print H
     else:
-        raise AssertionError("Can’t find enough keypoints.")
+        print("not enough keypoints")
 
-    dst = cv2.warpPerspective(img_, H, (img.shape[1] + img_.shape[1], img.shape[0]))
-    dst[0:img.shape[0], 0:img.shape[1]] = img
-    return dst
+    stitched_image = cv2.warpPerspective(img_right, H, (img_left.shape[1] + img_right.shape[1], img_left.shape[0]))
+    stitched_image[0:img_left.shape[0], 0:img_left.shape[1]] = img_left
+    return stitched_image
 
 def setup_frames(filename1, filename2):
     frame1 = cv2.imread(filename1)
@@ -200,11 +200,14 @@ def gui():
             sg.Radio("SIFT feature point Detector (Display flags)", "Radio", size=(40, 1), key="-FLAG-"),
         ],
 
-        [sg.Radio("Brute Force Matcher", "Radio", size=(20, 1), key="-MATCHER-")],
+        [sg.Radio("Feature Matcher (SIFT detector, SDD, and Ratio Test)", "Radio", size=(50, 1), key="-MATCHER-")],
 
-        [sg.Radio("Brute Force stitch", "Radio", size=(20, 1), key="-STITCH-")],
+        [sg.Radio("Images Stitcher (for SIFT detector, SDD, and Ratio Test Feature Matcher)", "Radio", size=(55, 1), key="-STITCH-")],
 
-        [sg.Button("Exit", size=(10, 1))],
+        [
+            sg.Button("Exit", size=(10, 1)),
+            sg.Button("Apply", size=(10, 1))
+        ],
 
     ]
     # Create the window and show it without the plot
@@ -213,8 +216,8 @@ def gui():
 
     just_switched = False
     show_both = False
-    filename1 = ""
-    filename2 = ""
+    filename1 = "Images/left.png"
+    filename2 = "Images/right.png"
     prev = ""
 
     while True:
@@ -223,81 +226,80 @@ def gui():
 
         if event == "Exit" or event == sg.WIN_CLOSED:
             break
-
-        if event == "-FILE-":
+        elif event == "-FILE-":
             filename1 = values ["-FILE-"]
             prev = ""
         elif event == "-FILE2-":
             filename2 = values["-FILE2-"]
             prev = ""
+        elif event == "Apply":
+            if filename1 != "" and filename2 != "":
 
-        if filename1 != "" and filename2 != "":
+                if values["-HARRIS CORNER-"]:
+                    show_both = True
 
-            if values["-NORMAL-"]:
-                show_both = True
+                    if prev != "harris corner":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1 = harris_corner(frame1, False)
+                        frame2 = harris_corner(frame2, False)
+                        just_switched = True
+                        prev = "harris corner"
 
-                if prev != "normal":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    just_switched = True
-                    prev = "normal"
+                elif values["-HARRIS CORNER DILATED-"]:
+                    show_both = True
 
-            elif values["-HARRIS CORNER-"]:
-                show_both = True
+                    if prev != "harris corner dilated":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1 = harris_corner(frame1, True)
+                        frame2 = harris_corner(frame2, True)
+                        just_switched = True
+                        prev = "harris corner dilated"
 
-                if prev != "harris corner":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1 = harris_corner(frame1, False)
-                    frame2 = harris_corner(frame2, False)
-                    just_switched = True
-                    prev = "harris corner"
+                elif values["-SIFT-"]:
+                    show_both = True
 
-            elif values["-HARRIS CORNER DILATED-"]:
-                show_both = True
+                    if prev != "sift":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1, kp, des = sift_detector(frame1, False, True)
+                        frame2, kp, des = sift_detector(frame2, False, True)
+                        just_switched = True
+                        prev = "sift"
 
-                if prev != "harris corner dilated":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1 = harris_corner(frame1, True)
-                    frame2 = harris_corner(frame2, True)
-                    just_switched = True
-                    prev = "harris corner dilated"
+                elif values["-FLAG-"]:
+                    show_both = True
 
-            elif values["-SIFT-"]:
-                show_both = True
+                    if prev != "flag":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1, kp, des = sift_detector(frame1, True, True)
+                        frame2, kp, des = sift_detector(frame2, True, True)
+                        just_switched = True
+                        prev = "flag"
 
-                if prev != "sift":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1, kp, des = sift_detector(frame1, False, True)
-                    frame2, kp, des = sift_detector(frame2, False, True)
-                    just_switched = True
-                    prev = "sift"
+                elif values["-MATCHER-"]:
+                    show_both = False
 
-            elif values["-FLAG-"]:
-                show_both = True
+                    if prev != "matcher":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1 = draw_feature_matching(frame1, frame2)
+                        just_switched = True
+                        prev = "matcher"
 
-                if prev != "flag":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1, kp, des = sift_detector(frame1, True, True)
-                    frame2, kp, des = sift_detector(frame2, True, True)
-                    just_switched = True
-                    prev = "flag"
+                elif values["-STITCH-"]:
+                    show_both = False
 
-            elif values["-MATCHER-"]:
-                show_both = False
+                    if prev != "stitch":
+                        frame1, frame2 = setup_frames(filename1, filename2)
+                        frame1 = stitch(frame1, frame2)
+                        just_switched = True
+                        prev = "stitch"
 
-                if prev != "matcher":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1 = draw_feature_matching(frame1, frame2)
-                    just_switched = True
-                    prev = "matcher"
+        if values["-NORMAL-"]:
+            show_both = True
 
-            elif values["-STITCH-"]:
-                show_both = False
-
-                if prev != "stitch":
-                    frame1, frame2 = setup_frames(filename1, filename2)
-                    frame1 = stitch(frame1, frame2)
-                    just_switched = True
-                    prev = "stitch"
+            if prev != "normal":
+                frame1, frame2 = setup_frames(filename1, filename2)
+                just_switched = True
+                prev = "normal"
 
         if just_switched and show_both:
             # if radio just switched and both frames should be shown,
