@@ -337,6 +337,3 @@ def gui():
 
 if __name__ == '__main__':
     gui()
-    #left = cv2.imread("Images/left.png")
-    #right = cv2.imread("Images/right.png")
-    #brute_force_matching(left, right)
