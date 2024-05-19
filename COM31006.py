@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 import PySimpleGUI as sg
-import matplotlib.pyplot as plt
-from random import randrange
 
 def resize(img, w, h):
     if img.shape[1] > w:
@@ -12,22 +10,43 @@ def resize(img, w, h):
         img = cv2.resize(img, [img.shape[1], h])
     return img
 
-def harris_corner(img, dilated):
+def harris_corner(img):
     # Convert cv2 Image to Grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # convert the Grayscale image to float32
-    gray = np.float32(gray)
+    # calculate intensity gradients using cv2 Sobel filter
+    Ix = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    Iy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
 
-    # Use cv2 harris corner function, img = input image, 2 = block size, 3 = ksize, 0.04 =
-    dst = cv2.cornerHarris(gray, 2, 3, 0.04)
 
-    if dilated:
-        # make the harris corner points larger to see them easier
-        dst = cv2.dilate(dst, None)
+    # calculate products of gradients to get harris matrix
+    harris_matrix = [[Ix ** 2, Iy * Ix], [Iy * Ix, Iy ** 2]]
+    # Harris matrix:    Ixx | Ixy
+    #                   ----|----
+    #                   Ixy | Iyy
 
-    # if dst value is above 10 percent of the max dst value for all pixels then paint that pixel red
-    img[dst > 0.01 * dst.max()] = [0, 0, 255]
+    # Apply a Gaussian filter to the products of gradients
+    # Blur smooths out noise in image & gives more reliable results
+    sigma = 1.5 # standard deviation for the gaussian kernal
+    harris_matrix[0][0] = cv2.GaussianBlur(harris_matrix[0][0], (3, 3), sigma)
+    harris_matrix[1][1] = cv2.GaussianBlur(harris_matrix[1][1], (3, 3), sigma)
+    harris_matrix[0][1] = cv2.GaussianBlur(harris_matrix[0][1], (3, 3), sigma)
+    harris_matrix[1][0] = cv2.GaussianBlur(harris_matrix[1][0], (3, 3), sigma)
+
+    # Compute Harris corner response
+    k = 0.04 # a standard value for k (found in lecture 11)
+    # subtract product of top right and bottom left
+    # from product of values on the diagonal of the harris matrix
+    det = (harris_matrix[0][0] * harris_matrix[1][1]) - (harris_matrix[0][1] * harris_matrix[1][0])
+    trace = harris_matrix[0][0] + harris_matrix[1][1] # add values on the diagonal of the harris matrix
+    R = det - k * (trace ** 2) # calculate corner score
+
+    # if R is large (greater than 1% of biggest value)
+    # then that pixel is a corner - update image to paint pixel red
+    img[R > 0.01 * R.max()] = [0, 0, 255]
+    # if R is large negative (less than 0.1% of most negative value)
+    # then that pixel is an edge - update image to paint pixel blue
+    img[R < 0.001 * R.min()] = [255, 0, 0]
 
     return img
 
@@ -195,7 +214,6 @@ def gui():
 
         [
             sg.Radio("Harris Corner Detector", "Radio", size=(20, 1), key="-HARRIS CORNER-"),
-            sg.Radio("Harris Corner Detector (dilated)", "Radio", size=(30, 1), key="-HARRIS CORNER DILATED-"),
             sg.Radio("SIFT feature point Detector", "Radio", size=(20, 1), key="-SIFT-"),
             sg.Radio("SIFT feature point Detector (Display flags)", "Radio", size=(40, 1), key="-FLAG-"),
         ],
@@ -212,7 +230,7 @@ def gui():
     ]
     # Create the window and show it without the plot
 
-    window = sg.Window("OpenCV Integration", layout, location=(800, 400))
+    window = sg.Window("COM31006 assignment Alexander Saw", layout, location=(200, 200))
 
     just_switched = False
     show_both = False
@@ -240,20 +258,10 @@ def gui():
 
                     if prev != "harris corner":
                         frame1, frame2 = setup_frames(filename1, filename2)
-                        frame1 = harris_corner(frame1, False)
-                        frame2 = harris_corner(frame2, False)
+                        frame1 = harris_corner(frame1)
+                        frame2 = harris_corner(frame2)
                         just_switched = True
                         prev = "harris corner"
-
-                elif values["-HARRIS CORNER DILATED-"]:
-                    show_both = True
-
-                    if prev != "harris corner dilated":
-                        frame1, frame2 = setup_frames(filename1, filename2)
-                        frame1 = harris_corner(frame1, True)
-                        frame2 = harris_corner(frame2, True)
-                        just_switched = True
-                        prev = "harris corner dilated"
 
                 elif values["-SIFT-"]:
                     show_both = True
@@ -328,8 +336,6 @@ def gui():
     window.close()
 
 if __name__ == '__main__':
-    # harris_corner_detector("wall.png")
-    # sift_detector("wall.png")
     gui()
     #left = cv2.imread("Images/left.png")
     #right = cv2.imread("Images/right.png")
